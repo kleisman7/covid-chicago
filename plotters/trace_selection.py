@@ -8,7 +8,7 @@ import numpy as np
 import matplotlib.pyplot as plt
 import scipy.stats
 import sys
-from data_comparison_spatial import plot_sim_and_ref
+from plotters.data_comparison_spatial import plot_sim_and_ref
 
 sys.path.append('../')
 from load_paths import load_box_paths
@@ -92,7 +92,10 @@ def sum_nll(df_values, ref_df_values, wt, wt_past=False):
         df_values = np.delete(df_values, na_pos)
         ref_df_values = np.delete(ref_df_values, na_pos)
     try:
-        x = -np.log10(scipy.stats.poisson(mu=df_values).pmf(k=ref_df_values))
+        x0 = scipy.stats.poisson(mu=df_values).pmf(k=ref_df_values)
+        #print(x0)
+        x0[x0==0] = 10.**-15
+        x = -np.log10(x0[x0>0])
     except ValueError:
         print('ERROR: The simulation and reference arrays may not be the same length.')
         print('Length simulation: ' + str(len(df_values)))
@@ -114,6 +117,7 @@ def sum_nll(df_values, ref_df_values, wt, wt_past=False):
 def rank_traces_nll(df, ems_nr, ref_df, weights_array=[1.0,1.0,1.0,1.0],wt=False):
     #Creation of rank_df
     [deaths_weight, crit_weight, non_icu_weight, cli_weight] = weights_array
+
 
     """ Ensure common dates"""
     df_dates = df[df['date'].isin(ref_df['date'].unique())].date.unique()
@@ -142,7 +146,7 @@ def rank_traces_nll(df, ems_nr, ref_df, weights_array=[1.0,1.0,1.0,1.0],wt=False
     csv_name = 'traces_ranked_region_' + str(ems_nr) + '.csv'
     #if wt:
     #    csv_name = 'traces_ranked_region_' + str(ems_nr) + '_wt.csv'
-    rank_export_df.to_csv(os.path.join(output_path,csv_name), index=False)
+    rank_export_df.to_csv(os.path.join(wdir,'simulation_output',exp_name,csv_name), index=False)
 
     return rank_export_df
 
@@ -166,7 +170,7 @@ def compare_ems(exp_name, ems_nr,first_day,last_day,weights_array,wt,
     ref_df = load_ref_df(ems_nr)
     ref_df = ref_df[ref_df['date'].between(first_day, last_day)]
 
-    df = load_sim_data(exp_name, region_suffix=region_suffix, column_list=column_list)
+    df = load_sim_data(exp_name, region_suffix=region_suffix, column_list=column_list,calc_prevalence=False)
     df = df[df['date'].between(first_day, ref_df['date'].max())]
     df['critical_with_suspected'] = df['critical']
     rank_export_df = rank_traces_nll(df, ems_nr, ref_df, weights_array=weights_array, wt=wt)

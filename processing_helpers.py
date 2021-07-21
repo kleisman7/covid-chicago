@@ -6,20 +6,18 @@ from load_paths import load_box_paths
 try:
     print(Location)
 except NameError:
-    if os.name == "posix": Location ="NUCLUSTER"
+    if os.name == "posix": Location ="Local"#"NUCLUSTER"
     else: Location ="Local"
 
 datapath, projectpath, wdir,exe_dir, git_dir = load_box_paths(Location=Location)
 
 
 def load_sim_data(exp_name, region_suffix ='_All', input_wdir=None, fname=None,
-                  input_sim_output_path =None, column_list=None, add_incidence=True,
-                  select_traces=True, traces_to_keep_ratio=4, traces_to_keep_min=100) :
+                  input_sim_output_path =None, column_list=None, add_incidence=True,calc_prevalence=True,
+                  select_traces=True, traces_to_keep_ratio=4, traces_to_keep_min=100,verbose=False) :
     input_wdir = input_wdir or wdir
     sim_output_path_base = os.path.join(input_wdir, 'simulation_output', exp_name)
     sim_output_path = input_sim_output_path or sim_output_path_base
-
-
     if region_suffix is not None:
         ems_nr = region_suffix.replace("_EMS-", "")
         if region_suffix == "_All": ems_nr = 0
@@ -32,19 +30,35 @@ def load_sim_data(exp_name, region_suffix ='_All', input_wdir=None, fname=None,
                 fname = 'trajectoriesDat_trim.csv'
             if os.path.exists(os.path.join(sim_output_path, fname)) == False:
                 fname = 'trajectoriesDat.csv'
-
-        print(f'Using {fname}')
+        if verbose:
+            print(f'From {sim_output_path}')
+            print(f'Using {fname}')
         if column_list is not None:
             column_list = list(set(['run_num', 'sample_num', 'scen_num','startdate', 'time'] + column_list))
-        df = pd.read_csv(os.path.join(sim_output_path, fname), usecols=column_list)
+        allcols = pd.read_csv(os.path.join(sim_output_path, fname), index_col=0,nrows=0).columns.tolist()
+        if 'death_det_cumul'+region_suffix in allcols:
+            column_list = [col.replace('deaths_det_cumul','death_det_cumul') for col in column_list]
+        if region_suffix == '_All':
+            column_list = [col for col in column_list if 'N_All' not in col]
+            column_list.extend(['N_EMS_'+str(em) for em in range(1,12)])
+        #print(column_list)
+        df = pd.read_csv(os.path.join(sim_output_path, fname), usecols=column_list)#nrows=559,skiprows=[i for i in range(1, 1+testnum*559) ])
+        if region_suffix == '_All':
+            Ncols = [col for col in column_list if 'N_EMS' in col]
+            df['N_All'] = df[Ncols].sum(axis=1)
+            df.drop(Ncols,axis=1,inplace=True)
+        if 'death_det_cumul'+region_suffix in column_list:
+            df.rename(columns={'death_det_cumul'+region_suffix:'deaths_det_cumul'+region_suffix},inplace=True)
         reg_cols = [col for col in df.columns if region_suffix in col]
+
         reg_cols = list(set(reg_cols + [col for col in df.columns if region_suffix.replace('-','_') in col]))
         if region_suffix =='_EMS-1':
             reg_cols = [col for col in reg_cols if not 'EMS-10' in col]
             reg_cols = [col for col in reg_cols if not 'EMS-11' in col]
         #df = df[['run_num', 'sample_num', 'scen_num','startdate', 'time']+reg_cols]
         df.columns = df.columns.str.replace(region_suffix, '')
-
+        df.rename(columns={'N'+region_suffix.replace('-','_'):'N'},inplace=True)
+        
         """ If trajectoriesDat_region_0 was re-generated from single region runs, it already includes selected traces only"""
         if "_combined" in exp_name and ems_nr == 0:
             select_traces = False
@@ -58,6 +72,8 @@ def load_sim_data(exp_name, region_suffix ='_All', input_wdir=None, fname=None,
                     n_traces_to_keep = traces_to_keep_min
                 if len(rank_export_df) < traces_to_keep_min :
                     n_traces_to_keep = len(rank_export_df)
+                if verbose:
+                    print(f'only using traces in traces_ranked_region_{str(ems_nr)}.csv, of which there are {n_traces_to_keep}.  Originally, there were {int(len(df.sample_num.unique()))}.')
 
                 rank_export_df_sub = rank_export_df[0:n_traces_to_keep]
                 df = df[df['sample_num'].isin(rank_export_df_sub.sample_num.unique())]
@@ -67,7 +83,7 @@ def load_sim_data(exp_name, region_suffix ='_All', input_wdir=None, fname=None,
             fname = 'trajectoriesDat_trim.csv'
         print(f'Using {fname}')
         df = pd.read_csv(os.path.join(sim_output_path, fname), usecols=column_list)  ## engine='python'
-
+    
     df = df.dropna()
     first_day = pd.Timestamp(df['startdate'].unique()[0])
     df['date'] = df['time'].apply(lambda x: first_day + pd.Timedelta(int(x),'days'))
@@ -75,9 +91,17 @@ def load_sim_data(exp_name, region_suffix ='_All', input_wdir=None, fname=None,
     df.drop_duplicates(subset=['run_num','scen_num', 'sample_num', 'date'], keep='last', inplace=True)
 
     if add_incidence:
+        if verbose:
+            print(f'Calculating incidence')
         #if 'recovered' in df.columns:
         #    df['infected_cumul'] = df['infected'] + df['recovered'] + df['deaths']
         df = calculate_incidence(df)
+    
+    if calc_prevalence:
+        if verbose:
+            print(f'Calculating prevalence')
+        df['Nmod'] = df['N'] - df['deaths']
+        df = calculate_prevalence(df)
     return df
 
 def merge_county_covidregions(df_x, key_x='region', key_y='County', add_pop =True):
@@ -86,7 +110,7 @@ def merge_county_covidregions(df_x, key_x='region', key_y='County', add_pop =Tru
     Keeps all rows from df_x and only those that match from df_y (left join).
     """
 
-    df_y = pd.read_csv(os.path.join(datapath, 'covid_IDPH', 'EMS Population','covidregion_county.csv'))
+    df_y = pd.read_csv(os.path.join(datapath, 'covidregion_county.csv'))
     df_x[key_x] = df_x[key_x] .str.lower()
     df_y[key_y] = df_y[key_y] .str.lower()
     df = pd.merge(how='left', left=df_x, left_on=key_x, right=df_y, right_on=key_y)
@@ -198,22 +222,22 @@ def load_vacc_df(ems_nr):
     return adf
 
 def load_ref_df(ems_nr):
-    ref_df_emr = pd.read_csv(os.path.join(datapath, 'covid_IDPH', 'Corona virus reports', 'emresource_by_region.csv'))
+    ref_df_emr = pd.read_csv(os.path.join(datapath, 'emresource_by_region.csv'))
     ref_df_emr['suspected_and_confirmed_covid_icu'] = ref_df_emr['suspected_covid_icu'] + ref_df_emr['confirmed_covid_icu']
     data_channel_names_emr = ['confirmed_covid_deaths_prev_24h', 'confirmed_covid_icu', 'covid_non_icu','suspected_covid_icu','suspected_and_confirmed_covid_icu']
     ref_df_emr = ref_df_emr.groupby(['date_of_extract','covid_region'])[data_channel_names_emr].agg(np.sum).reset_index()
     ref_df_emr['date'] = pd.to_datetime(ref_df_emr['date_of_extract'])
 
-    LL_file_date = get_latest_LLfiledate(file_path=os.path.join(datapath, 'covid_IDPH', 'Cleaned Data'))
-    ref_df_ll = pd.read_csv(os.path.join(datapath, 'covid_IDPH', 'Cleaned Data', f'{LL_file_date}_jg_aggregated_covidregion.csv'))
+    LL_file_date = get_latest_LLfiledate(file_path=datapath)
+    ref_df_ll = pd.read_csv(os.path.join(datapath, f'{LL_file_date}_jg_aggregated_covidregion.csv'))
     ref_df_ll['date'] = pd.to_datetime(ref_df_ll['date'])
 
-    ref_df_cli = pd.read_csv(os.path.join(datapath, 'covid_IDPH', 'Corona virus reports', 'CLI_admissions.csv'))
+    ref_df_cli = pd.read_csv(os.path.join(datapath,  'CLI_admissions.csv'))
     ref_df_cli = merge_county_covidregions(df_x=ref_df_cli, key_x='region', key_y='County', add_pop=False)
     ref_df_cli = ref_df_cli.groupby(['date','covid_region'])['inpatient'].agg(np.sum).reset_index()
     ref_df_cli['date'] = pd.to_datetime(ref_df_cli['date'])
 
-    ref_df_public = pd.read_csv(os.path.join(datapath, 'covid_IDPH', 'Corona virus reports', 'IDPH_public_county.csv'))
+    ref_df_public = pd.read_csv(os.path.join(datapath, 'IDPH_public_county.csv'))
     ref_df_public = merge_county_covidregions(df_x=ref_df_public, key_x='county', key_y='County', add_pop=False)
     ref_df_public = ref_df_public.groupby(['test_date','covid_region'])['confirmed_cases'].agg(np.sum).reset_index()
     ref_df_public['test_date'] = pd.to_datetime(ref_df_public['test_date'])
@@ -272,21 +296,20 @@ def load_ref_df(ems_nr):
 
 
 def calculate_prevalence(df):
-
-    df['N'] = df['N'] - df['deaths']
-    df['IFR'] = df['deaths'] / (df['recovered'] + df['deaths'])
-    df['IFR_t'] = df['new_deaths'] / (df['new_recovered'] + df['new_deaths'])
-    df['prevalence'] = df['infected'] / df['N']
-    df['seroprevalence_current'] = df['recovered'] / df['N']
-    df['seroprevalence'] = df.groupby(['scen_num', 'sample_num'])['seroprevalence_current'].transform('shift', 14)
+    
+    #df['IFR'] = df['deaths'] / (df['recovered'] + df['deaths'])
+    #df['IFR_t'] = df['new_deaths'] / (df['new_recovered'] + df['new_deaths'])
+    df['prevalence'] = df['infected'] / df['Nmod']
+    #df['seroprevalence_current'] = df['recovered'] / df['Nmod']
+    #df['seroprevalence'] = df.groupby(['scen_num', 'sample_num'])['seroprevalence_current'].transform('shift', 14)
 
     if 'infected_det' in df.columns:
         df['N_det'] = df['N'] - df['deaths_det']
-        df['IFR_det'] = df['deaths_det'] / (df['recovered_det'] + df['deaths_det'])
-        df['IFR_det_t'] = df['new_deaths_det'] / (df['new_recovered_det'] + df['new_deaths_det'])
+        #df['IFR_det'] = df['deaths_det'] / (df['recovered_det'] + df['deaths_det'])
+        #df['IFR_det_t'] = df['new_deaths_det'] / (df['new_recovered_det'] + df['new_deaths_det'])
         df['prevalence_det'] = df['infected_det'] / df['N_det']
-        df['seroprevalence_current_det'] = df['recovered_det'] / df['N_det']
-        df['seroprevalence_det'] = df.groupby(['scen_num', 'sample_num'])['seroprevalence_current_det'].transform('shift', 14)
+        #df['seroprevalence_current_det'] = df['recovered_det'] / df['N_det']
+        #df['seroprevalence_det'] = df.groupby(['scen_num', 'sample_num'])['seroprevalence_current_det'].transform('shift', 14)
     return df
 
 def calculate_incidence(adf, output_filename=None) :

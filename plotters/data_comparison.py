@@ -207,7 +207,6 @@ if __name__ == '__main__' :
         if("EMS" in exp_name) :
             ems_nr = exp_name.split('_')[2]
             region = exp_name.split('_')[1]
-
         if region == 'NMH_catchment':
             compare_NMH(exp_name)
         elif region == 'Chicago':

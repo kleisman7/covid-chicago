@@ -13,7 +13,6 @@ def load_box_paths(user_path=None, Location='Local'):
     else:
         if not user_path:
             user_path = os.path.expanduser('~')
-
         if 'tmh6260' in user_path:
             data_path = os.path.join(user_path, 'Box Sync')
             home_path = os.path.join(user_path, 'Box', 'NU-malaria-team', 'projects')  # had an error so I added this
@@ -66,6 +65,15 @@ def load_box_paths(user_path=None, Location='Local'):
             project_path = os.path.join(home_path, 'covid_chicago')
             wdir = os.path.join(project_path, 'cms_sim')
             exe_dir = os.path.join(home_path, 'binaries', 'compartments')
+
+        elif 'leisman' in user_path:
+            user_path = os.getcwd()[:40]
+            home_path = os.path.join(user_path, 'WaterProject')
+            data_path = os.path.join(user_path, '21-04-reproduce-study', 'modeldatafiles')
+            git_dir = os.path.join(user_path, 'WaterProject')
+            project_path = os.path.join(home_path)
+            wdir = os.path.join(user_path, '21-04-reproduce-study')
+            exe_dir = os.path.join(user_path,'WaterProject')
 
         else:
             from dotenv import load_dotenv
